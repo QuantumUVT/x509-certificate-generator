@@ -1,0 +1,33 @@
+name: "QKD Certificate Generator Security Analysis"
+
+disable-default-queries: false
+
+queries:
+  - uses: security-and-quality
+  - uses: security-extended
+
+paths-ignore:
+  - obj/
+  - build/
+  - .git/
+  - "**/*.pem"
+
+paths:
+  - "**/*.cpp"
+  - "**/*.h"
+
+packs:
+  - codeql/cpp-queries
+
+query-filters:
+  - exclude:
+      id: cpp/unused-local-variable
+      
+  - exclude:
+      id: cpp/short-circuit-operator
+      
+  # Include important security queries
+  - include:
+      tags:
+        - security
+        - correctness

@@ -12,6 +12,11 @@ on:
       - '**.h'
       - 'Makefile'
 
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
 jobs:
   dependency-audit:
     runs-on: ubuntu-latest
