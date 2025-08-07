@@ -47,4 +47,27 @@ clean-all: clean clean-certs
 # Rebuild
 rebuild: clean all
 
-.PHONY: all clean clean-certs clean-all rebuild
+.PHONY: all clean clean-certs clean-all rebuild test clean_tests
+
+# Test targets
+test: test_command_line_parser
+	cd tests && ./test_command_line_parser
+
+test_command_line_parser: tests/test_command_line_parser.cpp command_line_parser.cpp usage_printer.cpp
+	g++ -std=c++17 -Wall -Wextra -g -o tests/test_command_line_parser tests/test_command_line_parser.cpp command_line_parser.cpp usage_printer.cpp -lgtest -lgtest_main -pthread
+
+# Test targets
+test: tests/test_usage_printer
+	@echo "Running UsagePrinter unit tests..."
+	@./tests/test_usage_printer
+
+tests/test_usage_printer: tests/test_usage_printer.cpp usage_printer.h usage_printer.cpp
+	@mkdir -p tests
+	$(CXX) $(CXXFLAGS) -o $@ tests/test_usage_printer.cpp usage_printer.cpp
+
+clean_tests:
+	rm -f tests/test_usage_printer
+
+# Run tests as part of build verification
+test-all: $(TARGET) test
+	@echo "Build and tests completed successfully!"
