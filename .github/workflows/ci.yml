@@ -119,11 +119,12 @@ jobs:
 
     - name: Run cppcheck
       run: |
-        cppcheck --enable=all --std=c++17 --inline-suppr \
+        cppcheck --enable=all --std=c++17 --language=c++ --inline-suppr \
           --suppress=missingIncludeSystem \
           --suppress=unusedFunction \
+          --suppress=unmatchedSuppression \
           --error-exitcode=1 \
-          *.cpp *.h
+          --file-list=<(find . -name "*.cpp" -o -name "*.h" | grep -v "/\.git/")
 
     - name: Run clang-tidy
       run: |
