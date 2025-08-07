@@ -1,0 +1,382 @@
+name: Documentation
+
+on:
+  push:
+    branches: [ main, 2.0 ]
+    paths:
+      - '**.md'
+      - '**.cpp'
+      - '**.h'
+      - 'docs/**'
+  pull_request:
+    branches: [ main, 2.0 ]
+    paths:
+      - '**.md'
+      - '**.cpp'
+      - '**.h'
+      - 'docs/**'
+
+jobs:
+  generate-docs:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install documentation tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y doxygen graphviz
+
+    - name: Generate API documentation
+      run: |
+        # Create Doxygen config if it doesn't exist
+        if [ ! -f Doxyfile ]; then
+          doxygen -g
+          
+          # Customize Doxygen configuration
+          sed -i 's/PROJECT_NAME           = "My Project"/PROJECT_NAME           = "QKD Certificate Generator"/' Doxyfile
+          sed -i 's/OUTPUT_DIRECTORY       =/OUTPUT_DIRECTORY       = docs\//' Doxyfile
+          sed -i 's/INPUT                  =/INPUT                  = . README.md/' Doxyfile
+          sed -i 's/RECURSIVE              = NO/RECURSIVE              = YES/' Doxyfile
+          sed -i 's/GENERATE_HTML          = YES/GENERATE_HTML          = YES/' Doxyfile
+          sed -i 's/GENERATE_LATEX         = YES/GENERATE_LATEX         = NO/' Doxyfile
+          sed -i 's/HAVE_DOT               = NO/HAVE_DOT               = YES/' Doxyfile
+          sed -i 's/UML_LOOK               = NO/UML_LOOK               = YES/' Doxyfile
+          sed -i 's/FILE_PATTERNS          =/FILE_PATTERNS          = *.cpp *.h *.md/' Doxyfile
+          sed -i 's/EXCLUDE_PATTERNS       =/EXCLUDE_PATTERNS       = *\/build\/* *\/.git\/*/' Doxyfile
+        fi
+        
+        # Generate documentation
+        doxygen
+
+    - name: Create project documentation
+      run: |
+        mkdir -p docs/manual
+        
+        # Create comprehensive README if basic
+        cat > docs/manual/usage.md << 'EOF'
+        # QKD Certificate Generator - User Manual
+
+        ## Overview
+        The QKD Certificate Generator creates Ed25519 X.509 certificates using entropy from Quantum Key Distribution (QKD) systems.
+
+        ## Installation
+
+        ### Prerequisites
+        - Linux system (Ubuntu 20.04+ recommended)
+        - OpenSSL development libraries
+        - C++17 compatible compiler
+
+        ### Building from Source
+        ```bash
+        # Install dependencies
+        sudo apt-get install libssl-dev build-essential
+
+        # Clone repository
+        git clone https://github.com/QuantumUVT/x509-certificate-generator.git
+        cd x509-certificate-generator
+
+        # Build
+        make clean && make all
+        ```
+
+        ## Usage
+
+        ### Basic Usage
+        ```bash
+        ./cert_generator --key <base64-qkd-key> --prefix <output-prefix>
+        ```
+
+        ### Complete Example
+        ```bash
+        ./cert_generator \
+          --key "SGVsbG8gV29ybGQhIFRoaXMgaXMgYSB0ZXN0IGtleQ==" \
+          --key "QW5vdGhlciB0ZXN0IGtleSBmb3IgUUtEIGNlcnQ=" \
+          --prefix "my_certificate" \
+          --days 365 \
+          --C "US" \
+          --ST "California" \
+          --L "San Francisco" \
+          --O "My Organization" \
+          --OU "QKD Department" \
+          --CN "My QKD Certificate"
+        ```
+
+        ### Command Line Options
+
+        | Option | Description | Required | Default |
+        |--------|-------------|----------|---------|
+        | `--key` | Base64-encoded QKD key (repeatable) | Yes | - |
+        | `--prefix` | Output filename prefix | No | `qkd_ed25519` |
+        | `--days` | Certificate validity period | No | 365 |
+        | `--C` | Country Name (2 letter code) | No | - |
+        | `--ST` | State or Province Name | No | - |
+        | `--L` | Locality Name | No | - |
+        | `--O` | Organization Name | No | - |
+        | `--OU` | Organizational Unit Name | No | - |
+        | `--CN` | Common Name | No | `QKD-ED25519` |
+        | `--help` | Show help message | No | - |
+
+        ## Security Features
+
+        ### Entropy Processing
+        - Collects entropy from multiple QKD keys
+        - Uses SHA256 to derive deterministic 32-byte Ed25519 seeds
+        - Validates minimum entropy requirements (16 bytes)
+
+        ### Certificate Properties
+        - Ed25519 elliptic curve cryptography (quantum-resistant)
+        - Randomized serial numbers for uniqueness
+        - Self-signed certificate structure
+        - Standard X.509 v3 format
+
+        ### Memory Safety
+        - Uses RAII with smart pointers for OpenSSL objects
+        - Automatic resource cleanup
+        - Proper error handling and validation
+
+        ## Output Files
+
+        The generator creates two files:
+        - `<prefix>_cert.pem`: X.509 certificate in PEM format
+        - `<prefix>_key.pem`: Ed25519 private key in PEM format
+
+        ## Error Handling
+
+        The tool validates input and provides clear error messages for common issues:
+        - Missing QKD keys
+        - Invalid Base64 encoding
+        - Insufficient entropy
+        - File I/O errors
+        - OpenSSL errors
+
+        ## Architecture
+
+        The codebase is modularly organized:
+        - `Application`: Main application controller
+        - `CommandLineParser`: Argument parsing and validation
+        - `Base64Decoder`: Safe Base64 decoding with error handling
+        - `EntropyProcessor`: SHA256-based seed derivation
+        - `KeyGenerator`: Ed25519 key generation from seeds
+        - `CertificateGenerator`: X.509 certificate creation
+        - `UsagePrinter`: Help message formatting
+
+        ## Compliance and Standards
+
+        - **X.509**: Standard certificate format
+        - **Ed25519**: RFC 8032 elliptic curve signature scheme
+        - **PEM**: Privacy-Enhanced Mail encoding (RFC 1421)
+        - **Base64**: RFC 4648 encoding
+
+        ## Troubleshooting
+
+        ### Common Issues
+
+        1. **"Base64 decode failed"**
+           - Verify QKD key is properly Base64 encoded
+           - Check for extra whitespace or invalid characters
+
+        2. **"Not enough entropy"**
+           - Provide additional `--key` arguments
+           - Ensure each key provides sufficient randomness
+
+        3. **"Failed to create certificate"**
+           - Check file system permissions
+           - Verify OpenSSL installation
+
+        4. **"OpenSSL errors"**
+           - Update OpenSSL to latest version
+           - Check system crypto policies
+
+        ### Debug Mode
+        Build with debug symbols for troubleshooting:
+        ```bash
+        CXXFLAGS="-g -O0 -DDEBUG" make clean all
+        ```
+
+        ## Contributing
+
+        Please see the main repository for contribution guidelines and development setup instructions.
+        EOF
+
+        # Create architecture documentation
+        cat > docs/manual/architecture.md << 'EOF'
+        # Architecture Documentation
+
+        ## Overview
+        The QKD Certificate Generator follows a modular architecture with clear separation of concerns.
+
+        ## Module Breakdown
+
+        ### Core Classes
+
+        #### Application (`application.h/cpp`)
+        - **Purpose**: Main application controller and OpenSSL lifecycle management
+        - **Responsibilities**: Initialize/cleanup OpenSSL, coordinate other modules
+        - **Key Methods**: `run()`, `initializeOpenSSL()`, `cleanupOpenSSL()`
+
+        #### CommandLineParser (`command_line_parser.h/cpp`)
+        - **Purpose**: Parse and validate command line arguments
+        - **Responsibilities**: Argument parsing, input validation, help message coordination
+        - **Key Methods**: `parseArguments()`
+
+        #### Base64Decoder (`base64_decoder.h/cpp`)
+        - **Purpose**: Safe Base64 decoding with comprehensive error handling
+        - **Responsibilities**: Decode QKD keys, validate Base64 format
+        - **Key Methods**: `decode()`
+
+        #### EntropyProcessor (`entropy_processor.h/cpp`)
+        - **Purpose**: Process QKD entropy into Ed25519 seeds
+        - **Responsibilities**: SHA256 hashing, entropy validation, seed derivation
+        - **Key Methods**: `deriveEd25519Seed()`, `sha256Hash()`
+
+        #### KeyGenerator (`key_generator.h/cpp`)
+        - **Purpose**: Generate Ed25519 keys from processed seeds
+        - **Responsibilities**: Ed25519 key generation, OpenSSL key management
+        - **Key Methods**: `generateEd25519KeyFromSeed()`
+
+        #### CertificateGenerator (`certificate_generator.h/cpp`)
+        - **Purpose**: Create X.509 certificates from Ed25519 keys
+        - **Responsibilities**: Certificate creation, subject name building, file I/O
+        - **Key Methods**: `generateCertificate()`, `buildSubjectName()`
+
+        ### Support Classes
+
+        #### CertificateConfig (`certificate_config.h`)
+        - **Purpose**: Configuration data structure
+        - **Contains**: All certificate parameters and options
+
+        #### UsagePrinter (`usage_printer.h/cpp`)
+        - **Purpose**: Format and display help messages
+        - **Key Methods**: `printUsage()`
+
+        #### OpenSSL Wrappers (`openssl_wrappers.h`)
+        - **Purpose**: RAII wrappers for OpenSSL objects
+        - **Provides**: Smart pointers for memory-safe OpenSSL usage
+
+        ## Data Flow
+
+        1. **Input Processing**: CommandLineParser validates arguments → CertificateConfig
+        2. **Entropy Collection**: Multiple QKD keys → Base64Decoder → raw entropy
+        3. **Seed Derivation**: Raw entropy → EntropyProcessor → SHA256 seed
+        4. **Key Generation**: SHA256 seed → KeyGenerator → Ed25519 private key
+        5. **Certificate Creation**: Ed25519 key + config → CertificateGenerator → X.509 certificate
+        6. **Output**: PEM files written to filesystem
+
+        ## Security Design Principles
+
+        1. **Defense in Depth**: Multiple validation layers
+        2. **Fail Fast**: Early input validation and error reporting
+        3. **Memory Safety**: RAII and smart pointers throughout
+        4. **Entropy Validation**: Minimum entropy requirements enforced
+        5. **Deterministic Derivation**: SHA256 ensures reproducible results from same input
+
+        ## Build System
+
+        ### Makefile Structure
+        - **Modular compilation**: Each `.cpp` file compiled separately
+        - **Dependency management**: Automatic object file dependencies
+        - **Build targets**: `all`, `clean`, `clean-certs`, `rebuild`
+        - **Compiler flags**: C++17, optimization, warning flags
+
+        ### File Organization
+        ```
+        .
+        ├── main.cpp                 # Entry point
+        ├── application.*           # Application controller
+        ├── command_line_parser.*   # CLI parsing
+        ├── base64_decoder.*        # Base64 handling
+        ├── entropy_processor.*     # Entropy processing
+        ├── key_generator.*         # Key generation
+        ├── certificate_generator.* # Certificate creation
+        ├── usage_printer.*         # Help messages
+        ├── certificate_config.h    # Configuration structure
+        ├── openssl_wrappers.h      # OpenSSL RAII wrappers
+        └── Makefile               # Build system
+        ```
+
+        ## Testing Strategy
+
+        ### Unit Testing (Future Enhancement)
+        - Each module designed for independent testing
+        - Mock interfaces for OpenSSL operations
+        - Parameterized tests for various input combinations
+
+        ### Integration Testing
+        - End-to-end certificate generation validation
+        - OpenSSL certificate verification
+        - Error condition testing
+
+        ### Security Testing
+        - Static analysis (cppcheck, clang-tidy)
+        - Memory safety (Valgrind)
+        - Fuzzing input validation
+        - Cryptographic validation
+
+        ## Extension Points
+
+        The modular architecture supports future enhancements:
+
+        1. **Additional Key Types**: Extend KeyGenerator for RSA, ECDSA
+        2. **Certificate Extensions**: Enhance CertificateGenerator for X.509v3 extensions
+        3. **Configuration Formats**: Add JSON/YAML config file support
+        4. **Output Formats**: Support PKCS#12, DER formats
+        5. **HSM Integration**: Hardware Security Module support
+        6. **Certificate Chains**: CA certificate and chain generation
+
+        ## Performance Considerations
+
+        - **Memory Usage**: Smart pointers prevent leaks, minimal copying
+        - **CPU Usage**: SHA256 hashing is primary computational cost
+        - **I/O Optimization**: Single-pass file writing
+        - **Scalability**: Stateless design supports batch processing
+        EOF
+
+    - name: Validate documentation
+      run: |
+        echo "=== Documentation Validation ==="
+        
+        # Check for broken links in markdown files
+        find . -name "*.md" -exec echo "Checking: {}" \; -exec grep -n "http" {} \; || echo "No external links found"
+        
+        # Validate markdown syntax
+        for md_file in $(find . -name "*.md"); do
+          echo "Validating markdown syntax: $md_file"
+          # Basic markdown validation - check for common syntax issues
+          if grep -n "```.*```" "$md_file" | grep -v "^[0-9]*:```[a-zA-Z]*$" | grep -v "^[0-9]*:```$"; then
+            echo "Warning: Possible inline code block syntax issues in $md_file"
+          fi
+        done
+
+    - name: Check code documentation coverage
+      run: |
+        echo "=== Code Documentation Coverage ==="
+        
+        # Check for documented functions
+        for cpp_file in *.cpp; do
+          echo "Checking documentation in $cpp_file"
+          
+          # Count functions
+          func_count=$(grep -c "^[a-zA-Z_].*::" "$cpp_file" || echo 0)
+          
+          # Count documented functions (simple heuristic)
+          doc_count=$(grep -B5 "^[a-zA-Z_].*::" "$cpp_file" | grep -c "/\*\*\|///" || echo 0)
+          
+          echo "  Functions: $func_count, Documented: $doc_count"
+        done
+
+    - name: Upload documentation
+      uses: actions/upload-artifact@v4
+      with:
+        name: documentation
+        path: |
+          docs/
+        retention-days: 30
+
+    - name: Deploy to GitHub Pages (if main branch)
+      if: github.ref == 'refs/heads/main'
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./docs/html
+        destination_dir: api

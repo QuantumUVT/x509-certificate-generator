@@ -1,0 +1,220 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop, 2.0 ]
+  pull_request:
+    branches: [ main, develop, 2.0 ]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-20.04]
+        compiler: [gcc, clang]
+        include:
+          - os: ubuntu-latest
+            compiler: gcc
+            cxx: g++
+            cc: gcc
+          - os: ubuntu-latest
+            compiler: clang
+            cxx: clang++
+            cc: clang
+          - os: ubuntu-20.04
+            compiler: gcc
+            cxx: g++
+            cc: gcc
+          - os: ubuntu-20.04
+            compiler: clang
+            cxx: clang++
+            cc: clang
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libssl-dev build-essential
+
+    - name: Set up compiler
+      run: |
+        echo "CC=${{ matrix.cc }}" >> $GITHUB_ENV
+        echo "CXX=${{ matrix.cxx }}" >> $GITHUB_ENV
+
+    - name: Check compiler versions
+      run: |
+        ${{ matrix.cc }} --version
+        ${{ matrix.cxx }} --version
+
+    - name: Build project
+      run: |
+        make clean
+        make all
+
+    - name: Run basic tests
+      run: |
+        # Test help message
+        ./cert_generator --help
+        
+        # Test with sample QKD keys
+        ./cert_generator \
+          --key "SGVsbG8gV29ybGQhIFRoaXMgaXMgYSB0ZXN0IGtleQ==" \
+          --key "QW5vdGhlciB0ZXN0IGtleSBmb3IgUUtEIGNlcnQ=" \
+          --prefix "ci_test" \
+          --days 30 \
+          --C "US" \
+          --ST "California" \
+          --L "San Francisco" \
+          --O "CI Test Organization" \
+          --OU "QKD Testing" \
+          --CN "CI QKD Certificate"
+        
+        # Verify generated files exist
+        ls -la ci_test_*.pem
+        
+        # Verify certificate format
+        openssl x509 -in ci_test_cert.pem -text -noout
+        openssl pkey -in ci_test_key.pem -text -noout
+
+    - name: Test error handling
+      run: |
+        # Test with no keys (should fail)
+        if ./cert_generator --prefix "should_fail" 2>/dev/null; then
+          echo "ERROR: Should have failed with no keys"
+          exit 1
+        else
+          echo "✓ Correctly failed with no keys"
+        fi
+        
+        # Test with insufficient entropy (should fail)
+        if ./cert_generator --key "c2hvcnQ=" 2>/dev/null; then
+          echo "ERROR: Should have failed with insufficient entropy"
+          exit 1
+        else
+          echo "✓ Correctly failed with insufficient entropy"
+        fi
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      if: success()
+      with:
+        name: certificates-${{ matrix.os }}-${{ matrix.compiler }}
+        path: |
+          ci_test_*.pem
+        retention-days: 7
+
+  static-analysis:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libssl-dev build-essential cppcheck clang-tidy
+
+    - name: Run cppcheck
+      run: |
+        cppcheck --enable=all --std=c++17 --inline-suppr \
+          --suppress=missingIncludeSystem \
+          --suppress=unusedFunction \
+          --error-exitcode=1 \
+          *.cpp *.h
+
+    - name: Run clang-tidy
+      run: |
+        # Generate compile_commands.json for clang-tidy
+        bear -- make clean all || true
+        
+        # Run clang-tidy if compile_commands.json exists
+        if [ -f compile_commands.json ]; then
+          clang-tidy *.cpp -- -std=c++17 -I. -I/usr/include/openssl
+        else
+          echo "Warning: Could not generate compile_commands.json, skipping clang-tidy"
+        fi
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Run CodeQL Analysis
+      uses: github/codeql-action/init@v3
+      with:
+        languages: cpp
+
+    - name: Install dependencies and build
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libssl-dev build-essential
+        make clean
+        make all
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+
+  memory-safety:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libssl-dev build-essential valgrind
+
+    - name: Build with debug symbols
+      run: |
+        make clean
+        CXXFLAGS="-std=c++17 -Wall -Wextra -g -O0" make all
+
+    - name: Run with Valgrind
+      run: |
+        valgrind --tool=memcheck --leak-check=full --show-leak-kinds=all \
+          --track-origins=yes --verbose --error-exitcode=1 \
+          ./cert_generator \
+          --key "SGVsbG8gV29ybGQhIFRoaXMgaXMgYSB0ZXN0IGtleQ==" \
+          --key "QW5vdGhlciB0ZXN0IGtleSBmb3IgUUtEIGNlcnQ=" \
+          --prefix "valgrind_test" \
+          --days 1 \
+          --CN "Valgrind Test"
+
+  build-variants:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        build_type: [Debug, Release, RelWithDebInfo]
+        
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libssl-dev build-essential
+
+    - name: Build ${{ matrix.build_type }}
+      run: |
+        case "${{ matrix.build_type }}" in
+          Debug)
+            CXXFLAGS="-std=c++17 -Wall -Wextra -g -O0 -DDEBUG" make clean all
+            ;;
+          Release)
+            CXXFLAGS="-std=c++17 -Wall -Wextra -O3 -DNDEBUG" make clean all
+            ;;
+          RelWithDebInfo)
+            CXXFLAGS="-std=c++17 -Wall -Wextra -O2 -g" make clean all
+            ;;
+        esac
+
+    - name: Test build
+      run: |
+        ./cert_generator \
+          --key "SGVsbG8gV29ybGQhIFRoaXMgaXMgYSB0ZXN0IGtleQ==" \
+          --prefix "${{ matrix.build_type }}_test" \
+          --days 1 \
+          --CN "${{ matrix.build_type }} Test"
