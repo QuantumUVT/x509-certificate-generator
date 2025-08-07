@@ -42,7 +42,7 @@ X509_NAME_ptr CertificateGenerator::buildSubjectName(const CertificateConfig& co
     auto addEntry = [&](const std::string& field, const std::string& value) {
         if (!value.empty()) {
             if (!X509_NAME_add_entry_by_txt(name.get(), field.c_str(), MBSTRING_ASC,
-                                          (unsigned char*)value.c_str(), -1, -1, 0)) {
+                                          reinterpret_cast<const unsigned char*>(value.c_str()), -1, -1, 0)) {
                 throw std::runtime_error("Failed to add " + field + " to certificate subject");
             }
         }

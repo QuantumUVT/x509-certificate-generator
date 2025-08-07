@@ -1,0 +1,258 @@
+name: Code Quality
+
+on:
+  push:
+    branches: [ main, develop, 2.0 ]
+  pull_request:
+    branches: [ main, develop, 2.0 ]
+  schedule:
+    # Run every Sunday at 3 AM UTC
+    - cron: '0 3 * * 0'
+
+jobs:
+  sonarcloud:
+    name: SonarCloud Analysis
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule' || github.repository_owner == 'QuantumUVT'
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Shallow clones should be disabled for better analysis
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libssl-dev build-essential
+
+    - name: Build project
+      run: |
+        make clean && make all
+
+    - name: SonarCloud Scan
+      uses: SonarSource/sonarcloud-github-action@master
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  performance-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libssl-dev build-essential time
+
+    - name: Build optimized binary
+      run: |
+        make clean
+        CXXFLAGS="-std=c++17 -Wall -Wextra -O3 -DNDEBUG" make all
+
+    - name: Performance benchmark
+      run: |
+        echo "=== Performance Benchmark ==="
+        
+        # Test certificate generation performance
+        echo "Testing certificate generation performance..."
+        
+        # Generate test keys
+        TEST_KEY1="SGVsbG8gV29ybGQhIFRoaXMgaXMgYSB0ZXN0IGtleS4gSXQgY29udGFpbnMgZW5vdWdoIGVudHJvcHkgZm9yIHRlc3RpbmcgcHVycG9zZXMu"
+        TEST_KEY2="QW5vdGhlciB0ZXN0IGtleSB3aXRoIGFkZGl0aW9uYWwgZW50cm9weSBmb3IgUUtEIGNlcnRpZmljYXRlIGdlbmVyYXRpb24gdGVzdGluZy4="
+        
+        # Time certificate generation
+        echo "Timing single certificate generation..."
+        time ./cert_generator \
+          --key "$TEST_KEY1" \
+          --key "$TEST_KEY2" \
+          --prefix "perf_test" \
+          --days 365 \
+          --CN "Performance Test Certificate"
+        
+        # Batch performance test
+        echo "Timing batch certificate generation (10 certificates)..."
+        start_time=$(date +%s.%N)
+        for i in {1..10}; do
+          ./cert_generator \
+            --key "$TEST_KEY1" \
+            --key "$TEST_KEY2" \
+            --prefix "batch_test_$i" \
+            --days 1 \
+            --CN "Batch Test Certificate $i" >/dev/null 2>&1
+        done
+        end_time=$(date +%s.%N)
+        duration=$(echo "$end_time - $start_time" | bc -l)
+        echo "Batch generation time: ${duration}s"
+        echo "Average per certificate: $(echo "scale=3; $duration / 10" | bc -l)s"
+        
+        # Clean up generated files
+        rm -f perf_test_*.pem batch_test_*_*.pem
+
+    - name: Memory usage analysis
+      run: |
+        echo "=== Memory Usage Analysis ==="
+        
+        # Test memory usage with Valgrind
+        if command -v valgrind >/dev/null 2>&1; then
+          echo "Running memory usage analysis with Valgrind..."
+          valgrind --tool=massif --massif-out-file=massif.out \
+            ./cert_generator \
+            --key "SGVsbG8gV29ybGQhIFRoaXMgaXMgYSB0ZXN0IGtleQ==" \
+            --key "QW5vdGhlciB0ZXN0IGtleSBmb3IgUUtEIGNlcnQ=" \
+            --prefix "memory_test" \
+            --days 1 \
+            --CN "Memory Test Certificate"
+          
+          # Parse massif output for peak memory usage
+          if command -v ms_print >/dev/null 2>&1; then
+            echo "Peak memory usage:"
+            ms_print massif.out | grep "peak" || echo "Unable to parse memory usage"
+          fi
+          
+          rm -f massif.out memory_test_*.pem
+        else
+          echo "Valgrind not available, using system monitoring..."
+          # Alternative memory monitoring
+          /usr/bin/time -v ./cert_generator \
+            --key "SGVsbG8gV29ybGQhIFRoaXMgaXMgYSB0ZXN0IGtleQ==" \
+            --prefix "memory_test" \
+            --days 1 \
+            --CN "Memory Test" 2>&1 | grep "Maximum resident set size"
+          
+          rm -f memory_test_*.pem
+        fi
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libssl-dev build-essential gcov lcov
+
+    - name: Build with coverage
+      run: |
+        make clean
+        CXXFLAGS="-std=c++17 -Wall -Wextra -g -O0 --coverage" \
+        LDFLAGS="-lssl -lcrypto --coverage" \
+        make all
+
+    - name: Run tests for coverage
+      run: |
+        # Run various test scenarios to maximize coverage
+        echo "Running coverage tests..."
+        
+        # Test normal operation
+        ./cert_generator \
+          --key "SGVsbG8gV29ybGQhIFRoaXMgaXMgYSB0ZXN0IGtleQ==" \
+          --key "QW5vdGhlciB0ZXN0IGtleSBmb3IgUUtEIGNlcnQ=" \
+          --prefix "coverage_test" \
+          --days 30 \
+          --C "US" \
+          --ST "California" \
+          --L "San Francisco" \
+          --O "Test Organization" \
+          --OU "QKD Testing" \
+          --CN "Coverage Test Certificate"
+        
+        # Test help
+        ./cert_generator --help || true
+        
+        # Test error conditions
+        ./cert_generator 2>/dev/null || true  # No arguments
+        ./cert_generator --key "invalid" 2>/dev/null || true  # Invalid Base64
+        ./cert_generator --key "c2hvcnQ=" 2>/dev/null || true  # Insufficient entropy
+        ./cert_generator --key "SGVsbG8=" --days -1 2>/dev/null || true  # Invalid days
+
+    - name: Generate coverage report
+      run: |
+        # Generate coverage data
+        lcov --capture --directory . --output-file coverage.info
+        
+        # Remove system/external library coverage
+        lcov --remove coverage.info '/usr/*' --output-file coverage.info
+        lcov --remove coverage.info '*/test/*' --output-file coverage.info
+        
+        # Generate HTML report
+        genhtml coverage.info --output-directory coverage_html
+        
+        # Display coverage summary
+        lcov --list coverage.info
+
+    - name: Upload coverage reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: |
+          coverage.info
+          coverage_html/
+        retention-days: 30
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libssl-dev build-essential clang-format clang-tidy
+
+    - name: Check code formatting
+      run: |
+        echo "=== Code Formatting Check ==="
+        
+        # Check if clang-format is available
+        if command -v clang-format >/dev/null 2>&1; then
+          # Create .clang-format if it doesn't exist
+          if [ ! -f .clang-format ]; then
+            cat > .clang-format << 'EOF'
+        ---
+        Language: Cpp
+        BasedOnStyle: LLVM
+        IndentWidth: 4
+        TabWidth: 4
+        UseTab: Never
+        ColumnLimit: 100
+        BreakBeforeBraces: Attach
+        AllowShortFunctionsOnASingleLine: Empty
+        AllowShortIfStatementsOnASingleLine: false
+        AllowShortLoopsOnASingleLine: false
+        PointerAlignment: Left
+        ReferenceAlignment: Left
+        EOF
+          fi
+          
+          # Check formatting
+          echo "Checking code formatting..."
+          find . -name "*.cpp" -o -name "*.h" | xargs clang-format --dry-run --Werror
+        else
+          echo "clang-format not available, skipping formatting check"
+        fi
+
+    - name: Check for common issues
+      run: |
+        echo "=== Common Issues Check ==="
+        
+        # Check for trailing whitespace
+        echo "Checking for trailing whitespace..."
+        if grep -r "[[:space:]]$" *.cpp *.h; then
+          echo "Error: Found trailing whitespace"
+          exit 1
+        else
+          echo "✓ No trailing whitespace found"
+        fi
+        
+        # Check for tabs
+        echo "Checking for tabs..."
+        if grep -r $'\t' *.cpp *.h; then
+          echo "Warning: Found tabs (consider using spaces)"
+        else
+          echo "✓ No tabs found"
+        fi
+        
+        # Check for TODO/FIXME comments
+        echo "Checking for TODO/FIXME comments..."
+        grep -rn "TODO\|FIXME\|XXX" *.cpp *.h || echo "✓ No TODO/FIXME comments found"

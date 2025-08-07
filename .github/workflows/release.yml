@@ -1,0 +1,243 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        type: string
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      release_id: ${{ steps.create_release.outputs.id }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Get version
+      id: get_version
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+        else
+          echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.get_version.outputs.VERSION }}
+        release_name: QKD Certificate Generator ${{ steps.get_version.outputs.VERSION }}
+        body: |
+          ## QKD Certificate Generator Release ${{ steps.get_version.outputs.VERSION }}
+
+          ### Features
+          - Generate Ed25519 X.509 certificates from Quantum Key Distribution (QKD) keys
+          - SHA256-based entropy processing for secure key derivation
+          - Modular architecture for better maintainability and testing
+          - Randomized certificate serial numbers
+          - Comprehensive error handling and input validation
+
+          ### Security Enhancements
+          - Uses smart pointers for OpenSSL object management
+          - Safe Base64 decoding with proper error handling
+          - Entropy validation ensuring minimum 16 bytes from QKD keys
+          - SHA256 hashing for deterministic seed derivation
+
+          ### Usage
+          ```bash
+          ./cert_generator --key <base64-qkd-key> --prefix <output-prefix> [options]
+          ```
+
+          ### Downloads
+          - Linux x86_64 binary attached below
+          - Source code available in the repository
+
+          ### Checksums
+          See attached checksums file for binary verification.
+        draft: false
+        prerelease: false
+
+  build-and-upload:
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+            cc: gcc
+            cxx: g++
+          - os: ubuntu-20.04
+            arch: x86_64
+            cc: gcc
+            cxx: g++
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libssl-dev build-essential
+
+    - name: Get version
+      id: get_version
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+        else
+          echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Build release binary
+      run: |
+        export CC=${{ matrix.cc }}
+        export CXX=${{ matrix.cxx }}
+        make clean
+        CXXFLAGS="-std=c++17 -Wall -Wextra -O3 -DNDEBUG -static-libgcc -static-libstdc++" make all
+        
+        # Create release directory
+        mkdir -p release
+        cp cert_generator release/
+        cp README.md release/
+        
+        # Create example scripts
+        cat > release/example_usage.sh << 'EOF'
+        #!/bin/bash
+        # Example usage of QKD Certificate Generator
+        
+        # Generate certificate with sample QKD keys
+        ./cert_generator \
+          --key "SGVsbG8gV29ybGQhIFRoaXMgaXMgYSB0ZXN0IGtleQ==" \
+          --key "QW5vdGhlciB0ZXN0IGtleSBmb3IgUUtEIGNlcnQ=" \
+          --prefix "example" \
+          --days 365 \
+          --C "US" \
+          --ST "California" \
+          --L "San Francisco" \
+          --O "Example Organization" \
+          --OU "QKD Department" \
+          --CN "Example QKD Certificate"
+        
+        echo "Generated example_cert.pem and example_key.pem"
+        EOF
+        chmod +x release/example_usage.sh
+
+    - name: Test release binary
+      run: |
+        cd release
+        ./cert_generator --help
+        ./cert_generator \
+          --key "SGVsbG8gV29ybGQhIFRoaXMgaXMgYSB0ZXN0IGtleQ==" \
+          --key "QW5vdGhlciB0ZXN0IGtleSBmb3IgUUtEIGNlcnQ=" \
+          --prefix "release_test" \
+          --days 30 \
+          --CN "Release Test Certificate"
+        
+        # Verify the generated certificate
+        openssl x509 -in release_test_cert.pem -text -noout
+        rm release_test_*.pem
+
+    - name: Create package
+      run: |
+        cd release
+        tar -czf ../qkd-cert-generator-${{ steps.get_version.outputs.VERSION }}-linux-${{ matrix.arch }}.tar.gz *
+
+    - name: Generate checksums
+      run: |
+        sha256sum qkd-cert-generator-${{ steps.get_version.outputs.VERSION }}-linux-${{ matrix.arch }}.tar.gz > checksums-${{ matrix.os }}.txt
+        md5sum qkd-cert-generator-${{ steps.get_version.outputs.VERSION }}-linux-${{ matrix.arch }}.tar.gz >> checksums-${{ matrix.os }}.txt
+
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create-release.outputs.upload_url }}
+        asset_path: ./qkd-cert-generator-${{ steps.get_version.outputs.VERSION }}-linux-${{ matrix.arch }}.tar.gz
+        asset_name: qkd-cert-generator-${{ steps.get_version.outputs.VERSION }}-linux-${{ matrix.arch }}.tar.gz
+        asset_content_type: application/gzip
+
+    - name: Upload Checksums
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create-release.outputs.upload_url }}
+        asset_path: ./checksums-${{ matrix.os }}.txt
+        asset_name: checksums-${{ steps.get_version.outputs.VERSION }}-${{ matrix.os }}.txt
+        asset_content_type: text/plain
+
+  docker-build:
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Get version
+      id: get_version
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+        else
+          echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create Dockerfile
+      run: |
+        cat > Dockerfile << 'EOF'
+        FROM ubuntu:22.04
+
+        # Install dependencies
+        RUN apt-get update && apt-get install -y \
+            libssl-dev \
+            build-essential \
+            && rm -rf /var/lib/apt/lists/*
+
+        # Copy source code
+        WORKDIR /app
+        COPY . .
+
+        # Build the application
+        RUN make clean && make all
+
+        # Create non-root user
+        RUN useradd -m -u 1000 qkduser && \
+            chown -R qkduser:qkduser /app
+
+        USER qkduser
+
+        # Set entrypoint
+        ENTRYPOINT ["./cert_generator"]
+        CMD ["--help"]
+        EOF
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: |
+          ghcr.io/${{ github.repository_owner }}/qkd-cert-generator:${{ steps.get_version.outputs.VERSION }}
+          ghcr.io/${{ github.repository_owner }}/qkd-cert-generator:latest
+        platforms: linux/amd64

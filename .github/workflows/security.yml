@@ -1,0 +1,250 @@
+name: Security Audit
+
+on:
+  schedule:
+    # Run every Monday at 6 AM UTC
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '**.cpp'
+      - '**.h'
+      - 'Makefile'
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Audit system dependencies
+      run: |
+        echo "=== System Package Security Audit ==="
+        
+        # Check for known vulnerabilities in system packages
+        sudo apt-get update
+        sudo apt-get install -y debsecan
+        
+        # Check for security updates
+        apt list --upgradable 2>/dev/null | grep -i security || echo "No security updates needed"
+        
+        echo "=== OpenSSL Version Check ==="
+        dpkg -l | grep libssl
+        openssl version -a
+
+  static-security-analysis:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install security analysis tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libssl-dev \
+          build-essential \
+          cppcheck \
+          clang-tools \
+          flawfinder \
+          rats
+
+    - name: Run Flawfinder
+      run: |
+        echo "=== Flawfinder Security Analysis ==="
+        flawfinder --error-level=3 --html --context . > flawfinder_report.html
+        flawfinder --error-level=3 .
+
+    - name: Run RATS (Rough Auditing Tool for Security)
+      run: |
+        echo "=== RATS Security Analysis ==="
+        rats --html *.cpp *.h > rats_report.html
+        rats *.cpp *.h
+
+    - name: Run cppcheck security analysis
+      run: |
+        echo "=== Cppcheck Security Analysis ==="
+        cppcheck --enable=all \
+          --std=c++17 \
+          --inline-suppr \
+          --suppress=missingIncludeSystem \
+          --suppress=unusedFunction \
+          --xml --xml-version=2 \
+          *.cpp *.h 2> cppcheck_report.xml
+        
+        # Also output to console
+        cppcheck --enable=all \
+          --std=c++17 \
+          --inline-suppr \
+          --suppress=missingIncludeSystem \
+          --suppress=unusedFunction \
+          *.cpp *.h
+
+    - name: Upload security reports
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: security-reports
+        path: |
+          flawfinder_report.html
+          rats_report.html
+          cppcheck_report.xml
+        retention-days: 30
+
+  crypto-validation:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libssl-dev build-essential
+
+    - name: Build project
+      run: make clean && make all
+
+    - name: Validate cryptographic operations
+      run: |
+        echo "=== Cryptographic Validation ==="
+        
+        # Test with various key sizes
+        echo "Testing with minimal entropy..."
+        echo "VGVzdCBrZXkgd2l0aCAzMiBieXRlcyBvZiBlbnRyb3B5" | base64 -d | wc -c
+        
+        # Generate test certificate
+        ./cert_generator \
+          --key "VGVzdCBrZXkgd2l0aCAzMiBieXRlcyBvZiBlbnRyb3B5" \
+          --prefix "crypto_test" \
+          --days 1 \
+          --CN "Crypto Test"
+        
+        echo "=== Certificate Cryptographic Analysis ==="
+        # Verify certificate cryptographic properties
+        openssl x509 -in crypto_test_cert.pem -text -noout | grep -E "(Signature Algorithm|Public Key Algorithm|Public-Key)"
+        
+        # Verify key cryptographic properties  
+        openssl pkey -in crypto_test_key.pem -text -noout | grep -E "(Private-Key|Public-Key)"
+        
+        # Test certificate verification
+        openssl verify -CAfile crypto_test_cert.pem crypto_test_cert.pem
+        
+        echo "=== Key Entropy Analysis ==="
+        # Basic entropy check on generated private key
+        openssl pkey -in crypto_test_key.pem -text -noout | grep -A 32 "priv:" | grep -E "[0-9a-f]{2}:" | wc -l
+
+  vulnerability-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Semgrep
+      run: |
+        pip3 install semgrep
+
+    - name: Run Semgrep security scan
+      run: |
+        echo "=== Semgrep Security Scan ==="
+        semgrep --config=auto --error --strict --verbose .
+
+    - name: Run custom security checks
+      run: |
+        echo "=== Custom Security Checks ==="
+        
+        # Check for potential security issues in code
+        echo "Checking for unsafe functions..."
+        grep -rn "strcpy\|strcat\|sprintf\|gets\|scanf" *.cpp *.h || echo "No unsafe functions found"
+        
+        echo "Checking for hardcoded secrets..."
+        grep -rn "password\|secret\|key.*=" *.cpp *.h | grep -v "//.*password" || echo "No hardcoded secrets found"
+        
+        echo "Checking for debug/test code in production..."
+        grep -rn "DEBUG\|TEST\|FIXME\|TODO\|printf\|cout.*debug" *.cpp *.h || echo "No debug code found"
+        
+        echo "Checking for potential buffer overflows..."
+        grep -rn "memcpy\|memmove\|memset" *.cpp *.h || echo "No potentially unsafe memory operations found"
+
+  fuzzing:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libssl-dev build-essential
+
+    - name: Build for fuzzing
+      run: |
+        make clean
+        make all
+
+    - name: Basic input fuzzing
+      run: |
+        echo "=== Basic Input Fuzzing ==="
+        
+        # Test with invalid Base64
+        echo "Testing invalid Base64 inputs..."
+        for invalid_b64 in "invalid!" "12345" "short" ""; do
+          if ./cert_generator --key "$invalid_b64" 2>/dev/null; then
+            echo "ERROR: Should have failed with invalid Base64: $invalid_b64"
+            exit 1
+          else
+            echo "✓ Correctly rejected invalid Base64: $invalid_b64"
+          fi
+        done
+        
+        # Test with extreme values
+        echo "Testing extreme parameter values..."
+        
+        # Negative days
+        if ./cert_generator --key "VGVzdCBrZXk=" --days -1 2>/dev/null; then
+          echo "ERROR: Should have failed with negative days"
+          exit 1
+        else
+          echo "✓ Correctly rejected negative days"
+        fi
+        
+        # Very large days (potential overflow)
+        if ./cert_generator --key "VGVzdCBrZXk=" --days 999999999 2>/dev/null; then
+          echo "WARNING: Large days value accepted - review for potential overflow"
+        else
+          echo "✓ Large days value rejected"
+        fi
+        
+        echo "Basic fuzzing completed successfully"
+
+  supply-chain-security:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Analyze dependencies
+      run: |
+        echo "=== Supply Chain Security Analysis ==="
+        
+        echo "System dependencies:"
+        echo "- libssl-dev (OpenSSL)"
+        echo "- build-essential (GCC toolchain)"
+        
+        echo "Checking OpenSSL version and vulnerabilities..."
+        apt-cache show libssl-dev | grep Version
+        
+        echo "Checking for known OpenSSL CVEs..."
+        # This would normally query a vulnerability database
+        echo "Manual review recommended for OpenSSL version against CVE databases"
+
+    - name: License compliance check
+      run: |
+        echo "=== License Compliance Check ==="
+        
+        echo "Project files license check..."
+        find . -name "*.cpp" -o -name "*.h" | while read file; do
+          if ! head -10 "$file" | grep -i "license\|copyright" >/dev/null; then
+            echo "Warning: No license header in $file"
+          fi
+        done
+        
+        echo "Third-party license dependencies:"
+        echo "- OpenSSL: OpenSSL License (Apache 2.0 style)"
+        echo "- libstdc++: GCC Runtime Library Exception"
